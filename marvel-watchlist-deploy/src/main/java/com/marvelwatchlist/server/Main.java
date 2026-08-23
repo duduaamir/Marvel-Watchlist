@@ -41,7 +41,7 @@ public final class Main {
         ProgressStore store = new ProgressStore(dataFile);
         List<Title> titles = MarvelData.all();
 
-    HttpServer server = HttpServer.create(
+  HttpServer server = HttpServer.create(
     new InetSocketAddress("0.0.0.0", port), 0
 );
         server.setExecutor(Executors.newFixedThreadPool(8));
