@@ -12,7 +12,7 @@ WORKDIR /app
 
 COPY --from=build /app/out ./out
 
-EXPOSE 8080
+EXPOSE 10000
 
 CMD ["java", "-cp", "out", "com.marvelwatchlist.server.Main"]
 
