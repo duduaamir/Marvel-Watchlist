@@ -680,7 +680,9 @@ a { color: inherit; }
 }
 
 /* ------------------------------------------------------------------ modal */
-
+.modal-backdrop[hidden] {
+  display: none;
+}
 .modal-backdrop {
   position: fixed;
   inset: 0;
