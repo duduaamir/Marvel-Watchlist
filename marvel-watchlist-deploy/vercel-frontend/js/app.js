@@ -25,6 +25,20 @@
   // ------------------------------------------------------------- elements
 
   const el = {
+    loginBtn: document.getElementById('loginBtn'),
+signupBtn: document.getElementById('signupBtn'),
+logoutBtn: document.getElementById('logoutBtn'),
+userEmail: document.getElementById('userEmail'),
+
+authBackdrop: document.getElementById('authBackdrop'),
+authClose: document.getElementById('authClose'),
+authModalTitle: document.getElementById('authModalTitle'),
+authModalSubtitle: document.getElementById('authModalSubtitle'),
+authEmail: document.getElementById('authEmail'),
+authPassword: document.getElementById('authPassword'),
+authMessage: document.getElementById('authMessage'),
+authSwitchBtn: document.getElementById('authSwitchBtn'),
+authSubmitBtn: document.getElementById('authSubmitBtn'),
     statTotal: document.getElementById('statTotal'),
     statCompleted: document.getElementById('statCompleted'),
     statRemaining: document.getElementById('statRemaining'),
@@ -58,16 +72,32 @@
   const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
   const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
-  const userIdKey = 'marvel-watchlist-user-id';
-  function getUserId() {
-    let id = localStorage.getItem(userIdKey);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(userIdKey, id);
-    }
-    return id;
+ const SESSION_KEY = 'marvel-watchlist-session';
+
+let currentUser = null;
+let accessToken = null;
+
+function getStoredSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY));
+  } catch {
+    return null;
   }
-  const userId = getUserId();
+}
+
+function storeSession(session) {
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+
+  accessToken = session.access_token;
+  currentUser = session.user;
+}
+
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+
+  accessToken = null;
+  currentUser = null;
+}
 
   function api(path) { return API_URL ? `${API_URL}${path}` : path; }
   function sb(path) { return `${SUPABASE_URL}/rest/v1/${path}`; }
