@@ -1,565 +1,1353 @@
-(() => {
-  'use strict';
+// ============================================================
+// MARVEL WATCHLIST
+// vercel-frontend/js/app.js
+// ============================================================
 
-  // ---------------------------------------------------------------- state
 
-  const DOOMSDAY = new Date('2026-12-18T00:00:00');
+// ------------------------------------------------------------
+// CONFIG
+// ------------------------------------------------------------
 
-  const PHASE_ORDER = ['Phase 1', 'Phase 2', 'Phase 3', 'Phase 4', 'Phase 5', 'Phase 6'];
+const API_URL = 'https://marvel-watchlist.onrender.com/';
 
-  const TYPE_LABEL = { MOVIE: 'Movie', TV_SHOW: 'TV Show', SPECIAL: 'Special' };
+const SUPABASE_URL = 'https://ulfkgqttyyhqnieltkdn.supabase.co';
 
-  let titles = [];               // full catalog from /api/titles
-  let watched = new Set();       // ids
-  let schedule = {};             // id -> { date, time }
+const SUPABASE_ANON_KEY = 'sb_publishable_qPynWf204MA04jy6sor7wg_cnvmHl0t';
 
-  const filters = {
-    type: 'all',                 // 'all' | 'MOVIE' | 'TV_SHOW' | 'SPECIAL'
-    watch: 'all',                // 'all' | 'watched' | 'unwatched'
-    phase: 'all',
-    search: '',
-  };
 
-  let activeScheduleId = null;
+// ------------------------------------------------------------
+// STATE
+// ------------------------------------------------------------
 
-  // ------------------------------------------------------------- elements
-
-  const el = {
-    loginBtn: document.getElementById('loginBtn'),
-signupBtn: document.getElementById('signupBtn'),
-logoutBtn: document.getElementById('logoutBtn'),
-userEmail: document.getElementById('userEmail'),
-
-authBackdrop: document.getElementById('authBackdrop'),
-authClose: document.getElementById('authClose'),
-authModalTitle: document.getElementById('authModalTitle'),
-authModalSubtitle: document.getElementById('authModalSubtitle'),
-authEmail: document.getElementById('authEmail'),
-authPassword: document.getElementById('authPassword'),
-authMessage: document.getElementById('authMessage'),
-authSwitchBtn: document.getElementById('authSwitchBtn'),
-authSubmitBtn: document.getElementById('authSubmitBtn'),
-    statTotal: document.getElementById('statTotal'),
-    statCompleted: document.getElementById('statCompleted'),
-    statRemaining: document.getElementById('statRemaining'),
-    statNextScheduled: document.getElementById('statNextScheduled'),
-    progressText: document.getElementById('progressText'),
-    progressPct: document.getElementById('progressPct'),
-    progressFill: document.getElementById('progressFill'),
-    nextUpInner: document.getElementById('nextUpInner'),
-    timeline: document.getElementById('timeline'),
-    emptyState: document.getElementById('emptyState'),
-    searchInput: document.getElementById('searchInput'),
-    typeFilters: document.getElementById('typeFilters'),
-    phaseFilter: document.getElementById('phaseFilter'),
-    resetBtn: document.getElementById('resetBtn'),
-    // modal
-    backdrop: document.getElementById('scheduleBackdrop'),
-    modalTitle: document.getElementById('scheduleModalTitle'),
-    modalSubtitle: document.getElementById('scheduleModalSubtitle'),
-    scheduleDate: document.getElementById('scheduleDate'),
-    scheduleTime: document.getElementById('scheduleTime'),
-    scheduleSave: document.getElementById('scheduleSave'),
-    scheduleRemove: document.getElementById('scheduleRemove'),
-    scheduleClose: document.getElementById('scheduleClose'),
-  };
-
-  // ------------------------------------------------------------------ api
-
-  // Catalog still comes from the Java backend. Watch progress and schedules
-  // are stored permanently in Supabase.
-  const API_URL = 'https://YOUR-RENDER-SERVICE.onrender.com';
-  const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
-  const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
-
- const SESSION_KEY = 'marvel-watchlist-session';
+let titles = [];
+let watched = new Set();
+let schedule = {};
 
 let currentUser = null;
 let accessToken = null;
 
-function getStoredSession() {
-  try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY));
-  } catch {
-    return null;
-  }
+let activeScheduleId = null;
+let authMode = 'login';
+
+
+// ------------------------------------------------------------
+// DOM ELEMENTS
+// ------------------------------------------------------------
+
+const el = {
+  timeline: document.getElementById('timeline'),
+
+  watchedCount: document.getElementById('watchedCount'),
+  totalCount: document.getElementById('totalCount'),
+  progressFill: document.getElementById('progressFill'),
+  progressText: document.getElementById('progressText'),
+
+  searchInput: document.getElementById('searchInput'),
+  typeFilter: document.getElementById('typeFilter'),
+  phaseFilter: document.getElementById('phaseFilter'),
+
+  resetBtn: document.getElementById('resetBtn'),
+
+  // AUTH
+  loginBtn: document.getElementById('loginBtn'),
+  signupBtn: document.getElementById('signupBtn'),
+  logoutBtn: document.getElementById('logoutBtn'),
+  userEmail: document.getElementById('userEmail'),
+
+  authBackdrop: document.getElementById('authBackdrop'),
+  authClose: document.getElementById('authClose'),
+  authModalTitle: document.getElementById('authModalTitle'),
+  authModalSubtitle: document.getElementById('authModalSubtitle'),
+  authEmail: document.getElementById('authEmail'),
+  authPassword: document.getElementById('authPassword'),
+  authMessage: document.getElementById('authMessage'),
+  authSwitchBtn: document.getElementById('authSwitchBtn'),
+  authSubmitBtn: document.getElementById('authSubmitBtn'),
+
+  // SCHEDULE MODAL
+  scheduleBackdrop: document.getElementById('scheduleBackdrop'),
+  scheduleClose: document.getElementById('scheduleClose'),
+  scheduleTitle: document.getElementById('scheduleTitle'),
+  scheduleDate: document.getElementById('scheduleDate'),
+  scheduleTime: document.getElementById('scheduleTime'),
+  scheduleSave: document.getElementById('scheduleSave'),
+  scheduleDelete: document.getElementById('scheduleDelete'),
+};
+
+
+// ============================================================
+// SUPABASE HELPERS
+// ============================================================
+
+function sb(path) {
+  return `${SUPABASE_URL}/rest/v1/${path}`;
 }
+
+
+function sbHeaders(extra = {}) {
+  return {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${accessToken || SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+    ...extra,
+  };
+}
+
+
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+
+  if (!res.ok) {
+    const text = await res.text();
+
+    throw new Error(
+      `Request failed (${res.status}): ${text}`
+    );
+  }
+
+  return res.json();
+}
+
+
+// ============================================================
+// AUTH
+// ============================================================
 
 function storeSession(session) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-
   accessToken = session.access_token;
   currentUser = session.user;
+
+  localStorage.setItem(
+    'marvel-watchlist-session',
+    JSON.stringify(session)
+  );
 }
+
 
 function clearSession() {
-  localStorage.removeItem(SESSION_KEY);
-
   accessToken = null;
   currentUser = null;
+
+  localStorage.removeItem(
+    'marvel-watchlist-session'
+  );
 }
 
-  function api(path) { return API_URL ? `${API_URL}${path}` : path; }
-  function sb(path) { return `${SUPABASE_URL}/rest/v1/${path}`; }
-  function sbHeaders(extra = {}) {
-    return {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json',
-      ...extra,
-    };
+
+async function restoreSession() {
+  const stored = localStorage.getItem(
+    'marvel-watchlist-session'
+  );
+
+  if (!stored) {
+    return;
   }
 
-  async function fetchJson(url, options) {
-    const res = await fetch(url, options);
-    if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-    return res.json();
-  }
+  try {
+    const session = JSON.parse(stored);
 
-  async function loadSupabaseState() {
-    const rows = await fetchJson(sb(`watchlist_state?user_id=eq.${encodeURIComponent(userId)}&select=title_id,watched,schedule_date,schedule_time`), {
-      headers: sbHeaders(),
-    });
-    watched = new Set(rows.filter(r => r.watched).map(r => r.title_id));
-    schedule = {};
-    rows.filter(r => r.schedule_date).forEach(r => {
-      schedule[r.title_id] = { date: r.schedule_date, time: r.schedule_time || '' };
-    });
-  }
-
-  async function loadAll() {
-    const [titlesRes] = await Promise.all([
-      fetchJson(api('/api/titles')),
-      loadSupabaseState(),
-    ]);
-    titles = titlesRes.sort((a, b) => a.order - b.order);
-  }
-
-  async function saveState(id, patch) {
-    const payload = { user_id: userId, title_id: id, ...patch };
-    const res = await fetch(sb('watchlist_state?on_conflict=user_id,title_id'), {
-      method: 'POST',
-      headers: sbHeaders({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(`Supabase save -> ${res.status}`);
-  }
-
-  async function deleteState(id) {
-    const res = await fetch(sb(`watchlist_state?user_id=eq.${encodeURIComponent(userId)}&title_id=eq.${encodeURIComponent(id)}`), {
-      method: 'DELETE', headers: sbHeaders(),
-    });
-    if (!res.ok) throw new Error(`Supabase delete -> ${res.status}`);
-  }
-
-  async function resetSupabaseState() {
-    const res = await fetch(sb(`watchlist_state?user_id=eq.${encodeURIComponent(userId)}`), {
-      method: 'DELETE', headers: sbHeaders(),
-    });
-    if (!res.ok) throw new Error(`Supabase reset -> ${res.status}`);
-  }
-
-  // -------------------------------------------------------------- helpers
-
-  function posterGlyph(name) {
-    return name.split(/[\s:]+/).filter(Boolean).slice(0, 4).join(' ');
-  }
-
-  function formatScheduleShort(dateStr, timeStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr + 'T' + (timeStr || '00:00'));
-    const dateFmt = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    if (timeStr) {
-      const timeFmt = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-      return `${dateFmt}, ${timeFmt}`;
-    }
-    return dateFmt;
-  }
-
-  function matchesFilters(t) {
-    if (filters.type !== 'all' && t.type !== filters.type) return false;
-    if (filters.watch === 'watched' && !watched.has(t.id)) return false;
-    if (filters.watch === 'unwatched' && watched.has(t.id)) return false;
-    if (filters.phase !== 'all' && t.phase !== filters.phase) return false;
-    if (filters.search) {
-      const q = filters.search.toLowerCase();
-      const haystack = `${t.name} ${t.year} ${t.phase} ${t.saga} ${t.typeLabel}`.toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
-    return true;
-  }
-
-  function nextUnwatched() {
-    return titles.find((t) => !watched.has(t.id)) || null;
-  }
-
-  // ------------------------------------------------------------ rendering
-
-  function renderDashboard() {
-    const total = titles.length;
-    const completed = watched.size;
-    const remaining = total - completed;
-    const pct = total ? Math.round((completed / total) * 100) : 0;
-
-    el.statTotal.textContent = total;
-    el.statCompleted.textContent = completed;
-    el.statRemaining.textContent = remaining;
-    el.progressText.textContent = `${completed} / ${total} titles completed`;
-    el.progressPct.textContent = `${pct}%`;
-    el.progressFill.style.width = `${pct}%`;
-
-    // soonest upcoming scheduled title
-    const upcoming = Object.entries(schedule)
-      .filter(([, s]) => s.date)
-      .map(([id, s]) => ({ id, ...s, dt: new Date(s.date + 'T' + (s.time || '00:00')) }))
-      .sort((a, b) => a.dt - b.dt)[0];
-
-    if (upcoming) {
-      const t = titles.find((x) => x.id === upcoming.id);
-      el.statNextScheduled.textContent = t
-        ? `${t.name} — ${formatScheduleShort(upcoming.date, upcoming.time)}`
-        : formatScheduleShort(upcoming.date, upcoming.time);
-    } else {
-      el.statNextScheduled.textContent = 'None yet';
-    }
-  }
-
-  function renderNextUp() {
-    const next = nextUnwatched();
-    el.nextUpInner.innerHTML = '';
-
-    if (!next) {
-      const done = document.createElement('div');
-      done.className = 'next-up-done';
-      done.innerHTML = `You're all caught up. Assemble for Doomsday.<small>Every title in the timeline is marked watched.</small>`;
-      el.nextUpInner.appendChild(done);
+    if (!session.access_token) {
+      clearSession();
       return;
     }
 
-    const tag = document.createElement('span');
-    tag.className = 'next-up-tag';
-    tag.textContent = 'Next Up';
-
-    const poster = document.createElement('div');
-    poster.className = 'next-up-poster';
-    poster.style.background = `var(--theme-${next.theme})`;
-    poster.textContent = next.name.slice(0, 2).toUpperCase();
-
-    const text = document.createElement('div');
-    text.className = 'next-up-text';
-    text.innerHTML = `
-      <p class="next-up-title">${escapeHtml(next.name)}</p>
-      <p class="next-up-meta">${next.year} &middot; ${TYPE_LABEL[next.type]} &middot; ${escapeHtml(next.phase)} &middot; ${escapeHtml(next.runtime)}</p>
-    `;
-
-    const btn = document.createElement('button');
-    btn.className = 'primary-btn';
-    btn.textContent = 'Mark Watched';
-    btn.addEventListener('click', () => toggleWatch(next.id, true));
-
-    el.nextUpInner.append(tag, poster, text, btn);
-  }
-
-  function escapeHtml(s) {
-    const div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
-  }
-
-  function buildCard(t) {
-    const isWatched = watched.has(t.id);
-    const sched = schedule[t.id];
-
-    const card = document.createElement('article');
-    card.className = 'title-card' + (isWatched ? ' is-watched' : '');
-    card.dataset.id = t.id;
-
-    const poster = document.createElement('div');
-    poster.className = 'card-poster';
-    poster.style.background = `var(--theme-${t.theme})`;
-
-    const orderBadge = document.createElement('span');
-    orderBadge.className = 'card-order';
-    orderBadge.textContent = '#' + t.order;
-
-    const typeBadge = document.createElement('span');
-    typeBadge.className = 'card-typebadge';
-    typeBadge.textContent = TYPE_LABEL[t.type];
-
-    const stamp = document.createElement('div');
-    stamp.className = 'watched-stamp';
-    stamp.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-    const glyph = document.createElement('span');
-    glyph.className = 'card-poster-glyph';
-    glyph.textContent = posterGlyph(t.name);
-
-    poster.append(orderBadge, typeBadge, stamp, glyph);
-
-    const body = document.createElement('div');
-    body.className = 'card-body';
-
-    const title = document.createElement('h3');
-    title.className = 'card-title';
-    title.textContent = t.name;
-
-    const meta = document.createElement('div');
-    meta.className = 'card-meta';
-    meta.innerHTML = `<span>${t.year}</span><span>&middot;</span><span>${escapeHtml(t.phase)}</span><span>&middot;</span><span>${escapeHtml(t.runtime)}</span>`;
-
-    const notes = document.createElement('p');
-    notes.className = 'card-notes';
-    notes.textContent = t.notes;
-
-    const schedChip = document.createElement('div');
-    schedChip.className = 'card-schedule-chip' + (sched && sched.date ? ' visible' : '');
-    schedChip.innerHTML = sched && sched.date
-      ? `📅 ${formatScheduleShort(sched.date, sched.time)}`
-      : '';
-
-    const actions = document.createElement('div');
-    actions.className = 'card-actions';
-
-    const watchBtn = document.createElement('button');
-    watchBtn.className = 'watch-toggle-btn' + (isWatched ? ' is-active' : '');
-    watchBtn.textContent = isWatched ? '✓ Watched' : 'Mark Watched';
-    watchBtn.addEventListener('click', () => toggleWatch(t.id, !isWatched));
-
-    const schedBtn = document.createElement('button');
-    schedBtn.className = 'schedule-btn' + (sched && sched.date ? ' has-schedule' : '');
-    schedBtn.textContent = sched && sched.date ? 'Reschedule' : 'Schedule';
-    schedBtn.addEventListener('click', () => openScheduleModal(t.id));
-
-    actions.append(watchBtn, schedBtn);
-    body.append(title, meta, notes, schedChip, actions);
-    card.append(poster, body);
-    return card;
-  }
-
-  function renderTimeline() {
-    el.timeline.innerHTML = '';
-    let visibleCount = 0;
-
-    const byPhase = new Map();
-    for (const t of titles) {
-      if (!byPhase.has(t.phase)) byPhase.set(t.phase, []);
-      byPhase.get(t.phase).push(t);
-    }
-
-    const phaseKeys = [...byPhase.keys()].sort(
-      (a, b) => PHASE_ORDER.indexOf(a) - PHASE_ORDER.indexOf(b)
+    const res = await fetch(
+      `${SUPABASE_URL}/auth/v1/user`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      }
     );
 
-    for (const phase of phaseKeys) {
-      const items = byPhase.get(phase).filter(matchesFilters);
-      if (items.length === 0) continue;
-      visibleCount += items.length;
-
-      const group = document.createElement('section');
-      group.className = 'phase-group';
-
-      const header = document.createElement('div');
-      header.className = 'phase-header';
-      header.innerHTML = `
-        <span class="phase-title">${escapeHtml(phase)}</span>
-        <span class="phase-saga">${escapeHtml(items[0].saga)}</span>
-        <span class="phase-count">${items.length} title${items.length === 1 ? '' : 's'}</span>
-      `;
-
-      const grid = document.createElement('div');
-      grid.className = 'card-grid';
-      items.forEach((t, i) => {
-        const card = buildCard(t);
-        card.style.animationDelay = Math.min(i * 0.03, 0.4) + 's';
-        grid.appendChild(card);
-      });
-
-      group.append(header, grid);
-      el.timeline.appendChild(group);
-    }
-
-    el.emptyState.hidden = visibleCount !== 0;
-  }
-
-  function renderAll() {
-    renderDashboard();
-    renderNextUp();
-    renderTimeline();
-  }
-
-  // -------------------------------------------------------------- actions
-
-  async function toggleWatch(id, watchedNow) {
-    // optimistic UI update
-    if (watchedNow) watched.add(id); else watched.delete(id);
-    renderAll();
-    try {
-      await saveState(id, { watched: watchedNow });
-    } catch (e) {
-      console.error('Failed to save watch status', e);
-    }
-  }
-
-  function openScheduleModal(id) {
-    const t = titles.find((x) => x.id === id);
-    if (!t) return;
-    activeScheduleId = id;
-    el.modalTitle.textContent = 'Schedule this watch';
-    el.modalSubtitle.textContent = t.name;
-    const sched = schedule[id];
-    el.scheduleDate.value = sched && sched.date ? sched.date : '';
-    el.scheduleTime.value = sched && sched.time ? sched.time : '';
-    el.backdrop.hidden = false;
-    el.scheduleDate.focus();
-  }
-
-  function closeScheduleModal() {
-    el.backdrop.hidden = true;
-    activeScheduleId = null;
-  }
-
-  async function saveScheduleFromModal() {
-    if (!activeScheduleId) return;
-    const date = el.scheduleDate.value;
-    const time = el.scheduleTime.value;
-    if (!date) {
-      el.scheduleDate.focus();
+    if (!res.ok) {
+      clearSession();
       return;
     }
-    schedule[activeScheduleId] = { date, time };
-    closeScheduleModal();
-    renderAll();
-    try {
-      await saveState(activeScheduleId, { watched: watched.has(activeScheduleId), schedule_date: date, schedule_time: time || null });
-    } catch (e) {
-      console.error('Failed to save schedule', e);
-    }
+
+    const user = await res.json();
+
+    currentUser = user;
+    accessToken = session.access_token;
+
+  } catch (error) {
+    console.error('Session restore failed:', error);
+
+    clearSession();
+  }
+}
+
+
+function updateAuthUI() {
+  const loggedIn = Boolean(currentUser);
+
+  if (el.loginBtn) {
+    el.loginBtn.hidden = loggedIn;
   }
 
-  async function removeScheduleFromModal() {
-    if (!activeScheduleId) return;
-    const id = activeScheduleId;
-    delete schedule[id];
-    closeScheduleModal();
-    renderAll();
-    try {
-      await saveState(id, { watched: watched.has(id), schedule_date: null, schedule_time: null });
-    } catch (e) {
-      console.error('Failed to clear schedule', e);
-    }
+  if (el.signupBtn) {
+    el.signupBtn.hidden = loggedIn;
   }
 
-  async function resetProgress() {
-    if (!confirm('Clear all watched titles and scheduled watches? This cannot be undone.')) return;
-    watched.clear();
-    schedule = {};
-    renderAll();
-    try {
-      await resetSupabaseState();
-    } catch (e) {
-      console.error('Failed to reset', e);
-    }
+  if (el.logoutBtn) {
+    el.logoutBtn.hidden = !loggedIn;
   }
 
-  // --------------------------------------------------------------- filters
-
-  function initPhaseSelect() {
-    const seen = new Set();
-    for (const t of titles) {
-      if (seen.has(t.phase)) continue;
-      seen.add(t.phase);
-      const opt = document.createElement('option');
-      opt.value = t.phase;
-      opt.textContent = t.phase;
-      el.phaseFilter.appendChild(opt);
-    }
+  if (el.resetBtn) {
+    el.resetBtn.hidden = !loggedIn;
   }
 
-  function wireControls() {
-    el.searchInput.addEventListener('input', (e) => {
-      filters.search = e.target.value.trim();
-      renderTimeline();
-    });
+  if (el.userEmail) {
+    el.userEmail.hidden = !loggedIn;
 
-    el.typeFilters.addEventListener('click', (e) => {
-      const btn = e.target.closest('button');
-      if (!btn) return;
+    el.userEmail.textContent = loggedIn
+      ? currentUser.email
+      : '';
+  }
+}
 
-      if (btn.dataset.filterType) {
-        filters.type = btn.dataset.filterType;
-        el.typeFilters.querySelectorAll('[data-filter-type]').forEach((b) => b.classList.toggle('active', b === btn));
-      } else if (btn.dataset.filterWatch) {
-        const val = btn.dataset.filterWatch;
-        const isActive = btn.classList.contains('active');
-        filters.watch = isActive ? 'all' : val;
-        el.typeFilters.querySelectorAll('[data-filter-watch]').forEach((b) => b.classList.remove('active'));
-        if (!isActive) btn.classList.add('active');
+
+function openAuthModal(mode = 'login') {
+  authMode = mode;
+
+  if (!el.authBackdrop) return;
+
+  el.authEmail.value = '';
+  el.authPassword.value = '';
+  el.authMessage.textContent = '';
+
+  if (mode === 'login') {
+    el.authModalTitle.textContent =
+      'Welcome back';
+
+    el.authModalSubtitle.textContent =
+      'Log in to access your personal Marvel watchlist.';
+
+    el.authSubmitBtn.textContent =
+      'Log In';
+
+    el.authSwitchBtn.textContent =
+      'Need an account? Sign up';
+
+  } else {
+    el.authModalTitle.textContent =
+      'Join the timeline';
+
+    el.authModalSubtitle.textContent =
+      'Create an account and save your Marvel progress.';
+
+    el.authSubmitBtn.textContent =
+      'Create Account';
+
+    el.authSwitchBtn.textContent =
+      'Already have an account? Log in';
+  }
+
+  el.authBackdrop.hidden = false;
+
+  setTimeout(() => {
+    el.authEmail.focus();
+  }, 100);
+}
+
+
+function closeAuthModal() {
+  if (el.authBackdrop) {
+    el.authBackdrop.hidden = true;
+  }
+}
+
+
+async function signUp() {
+  const email = el.authEmail.value.trim();
+  const password = el.authPassword.value;
+
+  if (!email || !password) {
+    el.authMessage.textContent =
+      'Please enter your email and password.';
+
+    return;
+  }
+
+  if (password.length < 6) {
+    el.authMessage.textContent =
+      'Password must be at least 6 characters.';
+
+    return;
+  }
+
+  el.authSubmitBtn.disabled = true;
+
+  el.authMessage.textContent =
+    'Creating your account...';
+
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/auth/v1/signup`,
+      {
+        method: 'POST',
+
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+
+        body: JSON.stringify({
+          email,
+          password,
+        }),
       }
-      renderTimeline();
-    });
+    );
 
-    el.phaseFilter.addEventListener('change', (e) => {
-      filters.phase = e.target.value;
-      renderTimeline();
-    });
+    const data = await res.json();
 
-    el.resetBtn.addEventListener('click', resetProgress);
+    if (!res.ok) {
+      throw new Error(
+        data.msg ||
+        data.message ||
+        'Could not create account.'
+      );
+    }
 
-    el.scheduleSave.addEventListener('click', saveScheduleFromModal);
-    el.scheduleRemove.addEventListener('click', removeScheduleFromModal);
-    el.scheduleClose.addEventListener('click', closeScheduleModal);
-    el.backdrop.addEventListener('click', (e) => { if (e.target === el.backdrop) closeScheduleModal(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !el.backdrop.hidden) closeScheduleModal(); });
-  }
+    // If email confirmation is disabled,
+    // Supabase gives us a session immediately.
+    if (data.access_token && data.user) {
+      storeSession(data);
 
-  // -------------------------------------------------------------- countdown
+      closeAuthModal();
 
-  function tickCountdown() {
-    const now = new Date();
-    let diff = DOOMSDAY - now;
-    const cdDays = document.getElementById('cd-days');
-    const cdHours = document.getElementById('cd-hours');
-    const cdMins = document.getElementById('cd-mins');
-    const cdSecs = document.getElementById('cd-secs');
+      updateAuthUI();
 
-    if (diff <= 0) {
-      cdDays.textContent = '00';
-      cdHours.textContent = '00';
-      cdMins.textContent = '00';
-      cdSecs.textContent = '00';
+      watched = new Set();
+      schedule = {};
+
+      await loadSupabaseState();
+
+      renderAll();
+
       return;
     }
 
-    const days = Math.floor(diff / 86400000);
-    diff -= days * 86400000;
-    const hours = Math.floor(diff / 3600000);
-    diff -= hours * 3600000;
-    const mins = Math.floor(diff / 60000);
-    diff -= mins * 60000;
-    const secs = Math.floor(diff / 1000);
+    el.authMessage.textContent =
+      'Account created! Please check your email to confirm your account.';
 
-    cdDays.textContent = String(days).padStart(2, '0');
-    cdHours.textContent = String(hours).padStart(2, '0');
-    cdMins.textContent = String(mins).padStart(2, '0');
-    cdSecs.textContent = String(secs).padStart(2, '0');
+  } catch (error) {
+    console.error(error);
+
+    el.authMessage.textContent =
+      error.message ||
+      'Something went wrong while creating your account.';
+
+  } finally {
+    el.authSubmitBtn.disabled = false;
+  }
+}
+
+
+async function logIn() {
+  const email = el.authEmail.value.trim();
+  const password = el.authPassword.value;
+
+  if (!email || !password) {
+    el.authMessage.textContent =
+      'Please enter your email and password.';
+
+    return;
   }
 
-  // ------------------------------------------------------------------ boot
+  el.authSubmitBtn.disabled = true;
 
-  async function init() {
-    try {
-      await loadAll();
-    } catch (e) {
-      console.error('Failed to load watchlist data', e);
-      el.timeline.innerHTML = '<p class="empty-state">Could not reach the server. Is it still running?</p>';
-      return;
+  el.authMessage.textContent =
+    'Logging in...';
+
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+      {
+        method: 'POST',
+
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      }
+    );
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(
+        data.error_description ||
+        data.msg ||
+        data.message ||
+        'Invalid email or password.'
+      );
     }
-    initPhaseSelect();
-    wireControls();
+
+    storeSession(data);
+
+    closeAuthModal();
+
+    updateAuthUI();
+
+    watched = new Set();
+    schedule = {};
+
+    await loadSupabaseState();
+
     renderAll();
-    tickCountdown();
-    setInterval(tickCountdown, 1000);
+
+  } catch (error) {
+    console.error(error);
+
+    el.authMessage.textContent =
+      error.message ||
+      'Could not log in.';
+
+  } finally {
+    el.authSubmitBtn.disabled = false;
+  }
+}
+
+
+async function logOut() {
+  try {
+    if (accessToken) {
+      await fetch(
+        `${SUPABASE_URL}/auth/v1/logout`,
+        {
+          method: 'POST',
+
+          headers: sbHeaders(),
+        }
+      );
+    }
+
+  } catch (error) {
+    console.error('Logout failed:', error);
+
+  } finally {
+    clearSession();
+
+    watched = new Set();
+    schedule = {};
+
+    updateAuthUI();
+
+    renderAll();
+  }
+}
+
+
+// ============================================================
+// SUPABASE WATCHLIST
+// ============================================================
+
+async function loadSupabaseState() {
+  if (!currentUser) {
+    watched = new Set();
+    schedule = {};
+    return;
   }
 
-  init();
-})();
+  const rows = await fetchJson(
+    sb(
+      `watchlist_state?user_id=eq.${encodeURIComponent(
+        currentUser.id
+      )}&select=title_id,watched,schedule_date,schedule_time`
+    ),
+    {
+      headers: sbHeaders(),
+    }
+  );
+
+  watched = new Set(
+    rows
+      .filter(row => row.watched)
+      .map(row => row.title_id)
+  );
+
+  schedule = {};
+
+  rows
+    .filter(row => row.schedule_date)
+    .forEach(row => {
+      schedule[row.title_id] = {
+        date: row.schedule_date,
+        time: row.schedule_time || '',
+      };
+    });
+}
+
+
+async function saveState(id, patch) {
+  if (!currentUser) {
+    openAuthModal('login');
+
+    throw new Error(
+      'You must be logged in.'
+    );
+  }
+
+  const payload = {
+    user_id: currentUser.id,
+    title_id: id,
+    watched: watched.has(id),
+    schedule_date: null,
+    schedule_time: null,
+    ...patch,
+  };
+
+  // Keep existing schedule if it exists
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      patch,
+      'schedule_date'
+    ) &&
+    schedule[id]
+  ) {
+    payload.schedule_date =
+      schedule[id].date;
+
+    payload.schedule_time =
+      schedule[id].time || null;
+  }
+
+  const res = await fetch(
+    sb(
+      'watchlist_state?on_conflict=user_id,title_id'
+    ),
+    {
+      method: 'POST',
+
+      headers: sbHeaders({
+        Prefer:
+          'resolution=merge-duplicates,return=minimal',
+      }),
+
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+
+    throw new Error(
+      `Supabase save failed (${res.status}): ${text}`
+    );
+  }
+}
+
+
+async function deleteState(id) {
+  if (!currentUser) return;
+
+  const res = await fetch(
+    sb(
+      `watchlist_state?user_id=eq.${encodeURIComponent(
+        currentUser.id
+      )}&title_id=eq.${encodeURIComponent(id)}`
+    ),
+    {
+      method: 'DELETE',
+
+      headers: sbHeaders(),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `Supabase delete failed (${res.status})`
+    );
+  }
+}
+
+
+async function resetSupabaseState() {
+  if (!currentUser) return;
+
+  const res = await fetch(
+    sb(
+      `watchlist_state?user_id=eq.${encodeURIComponent(
+        currentUser.id
+      )}`
+    ),
+    {
+      method: 'DELETE',
+
+      headers: sbHeaders(),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `Supabase reset failed (${res.status})`
+    );
+  }
+}
+
+
+// ============================================================
+// LOAD MARVEL TITLES
+// ============================================================
+
+async function loadTitles() {
+  const data = await fetchJson(
+    `${API_URL}/api/titles`
+  );
+
+  titles = Array.isArray(data)
+    ? data
+    : [];
+}
+
+
+// ============================================================
+// WATCH STATUS
+// ============================================================
+
+async function toggleWatch(id) {
+  if (!currentUser) {
+    openAuthModal('login');
+    return;
+  }
+
+  const wasWatched = watched.has(id);
+
+  if (wasWatched) {
+    watched.delete(id);
+  } else {
+    watched.add(id);
+  }
+
+  renderAll();
+
+  try {
+    await saveState(id, {
+      watched: watched.has(id),
+    });
+
+  } catch (error) {
+    console.error(
+      'Failed to save watch status:',
+      error
+    );
+
+    // Roll back if database save fails
+    if (wasWatched) {
+      watched.add(id);
+    } else {
+      watched.delete(id);
+    }
+
+    renderAll();
+
+    alert(
+      'Could not save your progress. Please try again.'
+    );
+  }
+}
+
+
+// ============================================================
+// SCHEDULE
+// ============================================================
+
+function openScheduleModal(id) {
+  if (!currentUser) {
+    openAuthModal('login');
+    return;
+  }
+
+  activeScheduleId = id;
+
+  const title = titles.find(
+    item => item.id === id
+  );
+
+  if (el.scheduleTitle) {
+    el.scheduleTitle.textContent =
+      title
+        ? `Schedule ${title.name}`
+        : 'Schedule';
+  }
+
+  const existing = schedule[id];
+
+  el.scheduleDate.value =
+    existing?.date || '';
+
+  el.scheduleTime.value =
+    existing?.time || '';
+
+  el.scheduleBackdrop.hidden = false;
+}
+
+
+function closeScheduleModal() {
+  if (el.scheduleBackdrop) {
+    el.scheduleBackdrop.hidden = true;
+  }
+
+  activeScheduleId = null;
+}
+
+
+async function saveScheduleFromModal() {
+  if (!currentUser) {
+    closeScheduleModal();
+
+    openAuthModal('login');
+
+    return;
+  }
+
+  if (!activeScheduleId) return;
+
+  const date = el.scheduleDate.value;
+  const time = el.scheduleTime.value;
+
+  if (!date) {
+    alert('Please choose a date.');
+
+    return;
+  }
+
+  const id = activeScheduleId;
+
+  schedule[id] = {
+    date,
+    time,
+  };
+
+  renderAll();
+
+  closeScheduleModal();
+
+  try {
+    await saveState(id, {
+      watched: watched.has(id),
+      schedule_date: date,
+      schedule_time: time || null,
+    });
+
+  } catch (error) {
+    console.error(
+      'Failed to save schedule:',
+      error
+    );
+
+    alert(
+      'Could not save the schedule.'
+    );
+  }
+}
+
+
+async function deleteScheduleFromModal() {
+  if (!currentUser) return;
+
+  if (!activeScheduleId) return;
+
+  const id = activeScheduleId;
+
+  delete schedule[id];
+
+  renderAll();
+
+  closeScheduleModal();
+
+  try {
+    await saveState(id, {
+      watched: watched.has(id),
+      schedule_date: null,
+      schedule_time: null,
+    });
+
+  } catch (error) {
+    console.error(
+      'Failed to delete schedule:',
+      error
+    );
+  }
+}
+
+
+// ============================================================
+// FILTERING
+// ============================================================
+
+function getFilteredTitles() {
+  const query =
+    el.searchInput?.value
+      .trim()
+      .toLowerCase() || '';
+
+  const type =
+    el.typeFilter?.value || 'all';
+
+  const phase =
+    el.phaseFilter?.value || 'all';
+
+  return titles.filter(title => {
+
+    const matchesSearch =
+      !query ||
+      title.name
+        .toLowerCase()
+        .includes(query);
+
+    const matchesType =
+      type === 'all' ||
+      title.type === type;
+
+    const matchesPhase =
+      phase === 'all' ||
+      String(title.phase) === String(phase);
+
+    return (
+      matchesSearch &&
+      matchesType &&
+      matchesPhase
+    );
+  });
+}
+
+
+// ============================================================
+// POSTER PLACEHOLDER
+// ============================================================
+
+function posterGlyph(name = '') {
+  const first =
+    name
+      .trim()
+      .charAt(0)
+      .toUpperCase();
+
+  return first || 'M';
+}
+
+
+function buildPoster(title) {
+  const poster =
+    document.createElement('div');
+
+  poster.className = 'poster';
+
+  // Future-ready:
+  // If backend later sends posterUrl,
+  // this automatically uses it.
+  if (title.posterUrl) {
+    const img =
+      document.createElement('img');
+
+    img.src = title.posterUrl;
+    img.alt = `${title.name} poster`;
+
+    img.loading = 'lazy';
+
+    poster.appendChild(img);
+
+  } else {
+    const glyph =
+      document.createElement('span');
+
+    glyph.className =
+      'poster-glyph';
+
+    glyph.textContent =
+      posterGlyph(title.name);
+
+    poster.appendChild(glyph);
+  }
+
+  return poster;
+}
+
+
+// ============================================================
+// BUILD CARD
+// ============================================================
+
+function buildCard(title) {
+  const card =
+    document.createElement('article');
+
+  card.className =
+    'timeline-card';
+
+  card.dataset.id =
+    title.id;
+
+  if (watched.has(title.id)) {
+    card.classList.add('watched');
+  }
+
+
+  const poster =
+    buildPoster(title);
+
+
+  const content =
+    document.createElement('div');
+
+  content.className =
+    'card-content';
+
+
+  const heading =
+    document.createElement('div');
+
+  heading.className =
+    'card-heading';
+
+
+  const titleName =
+    document.createElement('h3');
+
+  titleName.textContent =
+    title.name;
+
+
+  const meta =
+    document.createElement('p');
+
+  meta.className =
+    'card-meta';
+
+  meta.textContent = [
+    title.year,
+    title.type,
+    title.phase
+      ? `Phase ${title.phase}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' • ');
+
+
+  heading.appendChild(titleName);
+
+  heading.appendChild(meta);
+
+
+  const actions =
+    document.createElement('div');
+
+  actions.className =
+    'card-actions';
+
+
+  const watchBtn =
+    document.createElement('button');
+
+  watchBtn.type =
+    'button';
+
+  watchBtn.className =
+    'watch-btn';
+
+  watchBtn.textContent =
+    watched.has(title.id)
+      ? '✓ Watched'
+      : 'Mark Watched';
+
+  watchBtn.addEventListener(
+    'click',
+    () => toggleWatch(title.id)
+  );
+
+
+  const scheduleBtn =
+    document.createElement('button');
+
+  scheduleBtn.type =
+    'button';
+
+  scheduleBtn.className =
+    'schedule-btn';
+
+  scheduleBtn.textContent =
+    schedule[title.id]
+      ? 'Edit Schedule'
+      : 'Schedule';
+
+  scheduleBtn.addEventListener(
+    'click',
+    () => openScheduleModal(title.id)
+  );
+
+
+  actions.appendChild(watchBtn);
+
+  actions.appendChild(scheduleBtn);
+
+
+  if (schedule[title.id]) {
+    const scheduleText =
+      document.createElement('p');
+
+    scheduleText.className =
+      'schedule-text';
+
+    const item =
+      schedule[title.id];
+
+    scheduleText.textContent =
+      `Scheduled: ${item.date}` +
+      (item.time
+        ? ` at ${item.time}`
+        : '');
+
+    content.appendChild(
+      scheduleText
+    );
+  }
+
+
+  content.appendChild(heading);
+
+  content.appendChild(actions);
+
+
+  card.appendChild(poster);
+
+  card.appendChild(content);
+
+
+  return card;
+}
+
+
+// ============================================================
+// RENDER TIMELINE
+// ============================================================
+
+function renderTimeline() {
+  if (!el.timeline) return;
+
+  const filtered =
+    getFilteredTitles();
+
+  el.timeline.innerHTML = '';
+
+  if (!filtered.length) {
+    el.timeline.innerHTML = `
+      <div class="empty-state">
+        No titles found.
+      </div>
+    `;
+
+    return;
+  }
+
+  filtered.forEach(title => {
+    el.timeline.appendChild(
+      buildCard(title)
+    );
+  });
+}
+
+
+// ============================================================
+// PROGRESS
+// ============================================================
+
+function renderProgress() {
+  const total =
+    titles.length;
+
+  const count =
+    watched.size;
+
+  const percentage =
+    total
+      ? Math.round(
+          (count / total) * 100
+        )
+      : 0;
+
+
+  if (el.watchedCount) {
+    el.watchedCount.textContent =
+      count;
+  }
+
+  if (el.totalCount) {
+    el.totalCount.textContent =
+      total;
+  }
+
+  if (el.progressText) {
+    el.progressText.textContent =
+      `${percentage}%`;
+  }
+
+  if (el.progressFill) {
+    el.progressFill.style.width =
+      `${percentage}%`;
+  }
+}
+
+
+// ============================================================
+// RENDER ALL
+// ============================================================
+
+function renderAll() {
+  renderProgress();
+
+  renderTimeline();
+}
+
+
+// ============================================================
+// RESET
+// ============================================================
+
+async function resetProgress() {
+  if (!currentUser) {
+    openAuthModal('login');
+    return;
+  }
+
+  const confirmed =
+    confirm(
+      'Are you sure you want to clear all watched titles and schedules?'
+    );
+
+  if (!confirmed) return;
+
+  try {
+    await resetSupabaseState();
+
+    watched = new Set();
+    schedule = {};
+
+    renderAll();
+
+  } catch (error) {
+    console.error(
+      'Reset failed:',
+      error
+    );
+
+    alert(
+      'Could not reset your progress.'
+    );
+  }
+}
+
+
+// ============================================================
+// EVENT LISTENERS
+// ============================================================
+
+function wireControls() {
+
+  // AUTH BUTTONS
+  el.loginBtn?.addEventListener(
+    'click',
+    () => openAuthModal('login')
+  );
+
+
+  el.signupBtn?.addEventListener(
+    'click',
+    () => openAuthModal('signup')
+  );
+
+
+  el.logoutBtn?.addEventListener(
+    'click',
+    logOut
+  );
+
+
+  el.authClose?.addEventListener(
+    'click',
+    closeAuthModal
+  );
+
+
+  el.authBackdrop?.addEventListener(
+    'click',
+    event => {
+      if (
+        event.target ===
+        el.authBackdrop
+      ) {
+        closeAuthModal();
+      }
+    }
+  );
+
+
+  el.authSwitchBtn?.addEventListener(
+    'click',
+    () => {
+      openAuthModal(
+        authMode === 'login'
+          ? 'signup'
+          : 'login'
+      );
+    }
+  );
+
+
+  el.authSubmitBtn?.addEventListener(
+    'click',
+    () => {
+      if (
+        authMode === 'login'
+      ) {
+        logIn();
+      } else {
+        signUp();
+      }
+    }
+  );
+
+
+  // ENTER KEY IN PASSWORD FIELD
+  el.authPassword?.addEventListener(
+    'keydown',
+    event => {
+      if (event.key === 'Enter') {
+        if (
+          authMode === 'login'
+        ) {
+          logIn();
+        } else {
+          signUp();
+        }
+      }
+    }
+  );
+
+
+  // SEARCH
+  el.searchInput?.addEventListener(
+    'input',
+    renderTimeline
+  );
+
+
+  // TYPE FILTER
+  el.typeFilter?.addEventListener(
+    'change',
+    renderTimeline
+  );
+
+
+  // PHASE FILTER
+  el.phaseFilter?.addEventListener(
+    'change',
+    renderTimeline
+  );
+
+
+  // RESET
+  el.resetBtn?.addEventListener(
+    'click',
+    resetProgress
+  );
+
+
+  // SCHEDULE
+  el.scheduleClose?.addEventListener(
+    'click',
+    closeScheduleModal
+  );
+
+
+  el.scheduleBackdrop?.addEventListener(
+    'click',
+    event => {
+      if (
+        event.target ===
+        el.scheduleBackdrop
+      ) {
+        closeScheduleModal();
+      }
+    }
+  );
+
+
+  el.scheduleSave?.addEventListener(
+    'click',
+    saveScheduleFromModal
+  );
+
+
+  el.scheduleDelete?.addEventListener(
+    'click',
+    deleteScheduleFromModal
+  );
+}
+
+
+// ============================================================
+// INITIALIZE
+// ============================================================
+
+async function init() {
+  try {
+
+    // Restore logged-in user first
+    await restoreSession();
+
+    updateAuthUI();
+
+
+    // Load Marvel titles
+    await loadTitles();
+
+
+    // Only load database data
+    // if a user is logged in
+    if (currentUser) {
+      await loadSupabaseState();
+    }
+
+
+    renderAll();
+
+    wireControls();
+
+  } catch (error) {
+
+    console.error(
+      'Initialization error:',
+      error
+    );
+
+    if (el.timeline) {
+      el.timeline.innerHTML = `
+        <div class="empty-state">
+          <h3>Something went wrong</h3>
+          <p>
+            Please check your API and Supabase configuration.
+          </p>
+        </div>
+      `;
+    }
+  }
+}
+
+
+// ============================================================
+// START APP
+// ============================================================
+
+document.addEventListener(
+  'DOMContentLoaded',
+  init
+);
