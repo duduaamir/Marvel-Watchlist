@@ -55,6 +55,7 @@ public final class Main {
         server.createContext("/", new StaticFileHandler(publicDir));
 
         server.start();
+        System.out.println("SERVER STARTED ON 0.0.0.0:" + port);
         System.out.println("==================================================");
         System.out.println("  MARVEL WATCHLIST COMMAND CENTER");
         System.out.println("  Serving " + titles.size() + " titles");
