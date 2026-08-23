@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: marvel-watchlist-api
+    runtime: java
+    buildCommand: chmod +x build.sh && ./build.sh
+    startCommand: cd out && java com.marvelwatchlist.server.Main
+    envVars:
+      - key: PORT
+        value: 8080
