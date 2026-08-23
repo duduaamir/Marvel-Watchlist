@@ -11,7 +11,8 @@ FROM eclipse-temurin:21-jre
 WORKDIR /app
 
 COPY --from=build /app/out ./out
+COPY --from=build /app/out/public ./public
 
-EXPOSE 8080
+EXPOSE 10000
 
 CMD ["java", "-cp", "out", "com.marvelwatchlist.server.Main"]
