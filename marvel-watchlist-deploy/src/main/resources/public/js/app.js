@@ -54,9 +54,9 @@
 
   // Catalog still comes from the Java backend. Watch progress and schedules
   // are stored permanently in Supabase.
-  const API_URL = 'https://YOUR-RENDER-SERVICE.onrender.com';
-  const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
-  const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+  const API_URL = 'https://marvel-watchlist.onrender.com';
+const SUPABASE_URL = 'YOUR_ACTUAL_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_ACTUAL_SUPABASE_ANON_KEY';
 
   const userIdKey = 'marvel-watchlist-user-id';
   function getUserId() {
