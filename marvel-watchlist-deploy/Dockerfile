@@ -14,4 +14,5 @@ COPY --from=build /app/out ./out
 
 EXPOSE 8080
 
-CMD ["java", "-cp", "out", "Main"]
+CMD ["java", "-cp", "out", "com.marvelwatchlist.server.Main"]
+
