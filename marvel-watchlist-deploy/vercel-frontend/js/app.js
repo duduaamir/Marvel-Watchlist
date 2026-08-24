@@ -18,6 +18,12 @@ const el = {
   scheduleBackdrop: $('scheduleBackdrop'), scheduleClose: $('scheduleClose'), scheduleTitle: $('scheduleTitle'), scheduleDate: $('scheduleDate'), scheduleTime: $('scheduleTime'), scheduleSave: $('scheduleSave'), scheduleDelete: $('scheduleDelete'), scheduleRemove: $('scheduleRemove'), scheduleModalSubtitle: $('scheduleModalSubtitle')
 };
 
+async function json(url, options = {}) {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  return response.json();
+}
+
 async function restoreSession() {
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
