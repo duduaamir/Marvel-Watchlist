@@ -4,7 +4,8 @@ const SUPABASE_URL = 'https://ulfkgqttyyhqnieltkdn.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qPynWf204MA04jy6sor7wg_cnvmHl0t';
 
 let titles = [], watched = new Set(), schedule = {};
-let currentUser = null, accessToken = null, activeScheduleId = null, authMode = 'login';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let currentUser = null, activeScheduleId = null, authMode = 'login';
 let typeFilter = 'all', watchFilter = 'all';
 
 const $ = id => document.getElementById(id);
@@ -17,18 +18,10 @@ const el = {
   scheduleBackdrop: $('scheduleBackdrop'), scheduleClose: $('scheduleClose'), scheduleTitle: $('scheduleTitle'), scheduleDate: $('scheduleDate'), scheduleTime: $('scheduleTime'), scheduleSave: $('scheduleSave'), scheduleDelete: $('scheduleDelete'), scheduleRemove: $('scheduleRemove'), scheduleModalSubtitle: $('scheduleModalSubtitle')
 };
 
-function headers(extra = {}) { return { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken || SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json', ...extra }; }
-function rest(path) { return `${SUPABASE_URL}/rest/v1/${path}`; }
-async function json(url, options = {}) { const r = await fetch(url, options); if (!r.ok) throw new Error(await r.text()); return r.json(); }
-
-function storeSession(s) { accessToken = s.access_token; currentUser = s.user; localStorage.setItem('marvel-watchlist-session', JSON.stringify(s)); }
-function clearSession() { accessToken = null; currentUser = null; localStorage.removeItem('marvel-watchlist-session'); }
-
 async function restoreSession() {
-  const raw = localStorage.getItem('marvel-watchlist-session'); if (!raw) return;
-  try { const s = JSON.parse(raw); const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${s.access_token}` } }); if (!r.ok) throw new Error(); currentUser = await r.json(); accessToken = s.access_token; } catch { clearSession(); }
+  const { data: { session } } = await supabase.auth.getSession();
+  currentUser = session?.user || null;
 }
-
 function updateAuthUI() {
   const yes = !!currentUser;
   if (el.loginBtn) el.loginBtn.hidden = yes; if (el.signupBtn) el.signupBtn.hidden = yes;
@@ -52,31 +45,51 @@ async function submitAuth() {
   const email = el.authEmail.value.trim(), password = el.authPassword.value;
   if (!email || !password) { el.authMessage.textContent = 'Please enter your email and password.'; return; }
   if (password.length < 6) { el.authMessage.textContent = 'Password must be at least 6 characters.'; return; }
-  el.authSubmitBtn.disabled = true; el.authMessage.textContent = authMode === 'login' ? 'Logging in...' : 'Creating your account...';
+  el.authSubmitBtn.disabled = true;
+  el.authMessage.textContent = authMode === 'login' ? 'Logging in...' : 'Creating your account...';
   try {
-    const endpoint = authMode === 'login' ? `${SUPABASE_URL}/auth/v1/token?grant_type=password` : `${SUPABASE_URL}/auth/v1/signup`;
-    const r = await fetch(endpoint, { method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
-    const data = await r.json(); if (!r.ok) throw new Error(data.error_description || data.msg || data.message || 'Authentication failed.');
-    if (!data.access_token) { el.authMessage.textContent = 'Account created. Check your email to confirm it, then log in.'; return; }
-    storeSession(data); watched = new Set(); schedule = {}; await loadState(); updateAuthUI(); closeAuth(); renderAll();
-  } catch (e) { el.authMessage.textContent = e.message || 'Something went wrong.'; }
+    const result = authMode === 'login'
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
+    if (result.error) throw result.error;
+    if (authMode === 'signup' && !result.data.session) {
+      el.authMessage.textContent = 'Account created. Check your email to confirm it, then return here and log in.';
+      return;
+    }
+    currentUser = result.data.user || result.data.session?.user || null;
+    watched = new Set(); schedule = {};
+    await loadState(); updateAuthUI(); closeAuth(); renderAll();
+  } catch (e) { el.authMessage.textContent = e.message || 'Authentication failed.'; }
   finally { el.authSubmitBtn.disabled = false; }
 }
 
-async function logOut() { try { if (accessToken) await fetch(`${SUPABASE_URL}/auth/v1/logout`, { method: 'POST', headers: headers() }); } finally { clearSession(); watched = new Set(); schedule = {}; updateAuthUI(); renderAll(); } }
+async function logOut() {
+  await supabase.auth.signOut();
+  currentUser = null; watched = new Set(); schedule = {};
+  updateAuthUI(); renderAll();
+}
 
 async function loadState() {
   if (!currentUser) { watched = new Set(); schedule = {}; return; }
-  const rows = await json(rest(`watchlist_state?select=title_id,watched,schedule_date,schedule_time`), { headers: headers() });
-  watched = new Set(rows.filter(x => x.watched).map(x => x.title_id)); schedule = {};
-  rows.filter(x => x.schedule_date).forEach(x => schedule[x.title_id] = { date: x.schedule_date, time: x.schedule_time || '' });
+  const { data: rows, error } = await supabase
+    .from('watchlist_state')
+    .select('title_id, watched, schedule_date, schedule_time');
+  if (error) throw error;
+  watched = new Set((rows || []).filter(x => x.watched).map(x => x.title_id));
+  schedule = {};
+  (rows || []).filter(x => x.schedule_date).forEach(x => schedule[x.title_id] = { date: x.schedule_date, time: x.schedule_time || '' });
 }
-async function saveState(id, patch = {}) {
-  const payload = { user_id: currentUser.id, title_id: id, watched: watched.has(id), schedule_date: schedule[id]?.date || null, schedule_time: schedule[id]?.time || null, ...patch };
-  const r = await fetch(rest('watchlist_state?on_conflict=user_id,title_id'), { method: 'POST', headers: headers({ Prefer: 'resolution=merge-duplicates,return=minimal' }), body: JSON.stringify(payload) });
-  if (!r.ok) throw new Error(await r.text());
+async function saveState(id) {
+  const { error } = await supabase.from('watchlist_state').upsert({
+    user_id: currentUser.id, title_id: id, watched: watched.has(id),
+    schedule_date: schedule[id]?.date || null, schedule_time: schedule[id]?.time || null
+  }, { onConflict: 'user_id,title_id' });
+  if (error) throw error;
 }
-async function resetState() { const r = await fetch(rest('watchlist_state'), { method: 'DELETE', headers: headers() }); if (!r.ok) throw new Error(await r.text()); }
+async function resetState() {
+  const { error } = await supabase.from('watchlist_state').delete().eq('user_id', currentUser.id);
+  if (error) throw error;
+}
 
 async function loadTitles() { const data = await json(`${API_URL}/api/titles`); titles = Array.isArray(data) ? data.sort((a,b) => (a.order || 0) - (b.order || 0)) : []; }
 
@@ -127,7 +140,7 @@ async function saveSchedule() {
 }
 async function removeSchedule() {
   if (!activeScheduleId) return; const id = activeScheduleId, old = schedule[id]; delete schedule[id]; renderAll(); closeSchedule();
-  try { await saveState(id, { schedule_date: null, schedule_time: null }); } catch (e) { if (old) schedule[id] = old; renderAll(); alert('Could not remove the schedule.'); }
+  try { await saveState(id); } catch (e) { if (old) schedule[id] = old; renderAll(); alert('Could not remove the schedule.'); }
 }
 
 function renderDashboard() {
@@ -163,6 +176,8 @@ function wire() {
   el.resetBtn?.addEventListener('click', async () => { if (!currentUser || !confirm('Clear all watched titles and schedules?')) return; try { await resetState(); watched = new Set(); schedule = {}; renderAll(); } catch { alert('Could not reset your progress.'); } });
   el.scheduleClose?.addEventListener('click', closeSchedule); el.scheduleSave?.addEventListener('click', saveSchedule); (el.scheduleDelete || el.scheduleRemove)?.addEventListener('click', removeSchedule); el.scheduleBackdrop?.addEventListener('click', e => { if (e.target === el.scheduleBackdrop) closeSchedule(); });
 }
+
+supabase.auth.onAuthStateChange((_event, session) => { currentUser = session?.user || null; updateAuthUI(); });
 
 async function init() {
   wire(); tickCountdown(); setInterval(tickCountdown, 1000);
