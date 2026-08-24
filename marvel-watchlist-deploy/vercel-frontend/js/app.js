@@ -4,7 +4,7 @@ const SUPABASE_URL = 'https://ulfkgqttyyhqnieltkdn.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qPynWf204MA04jy6sor7wg_cnvmHl0t';
 
 let titles = [], watched = new Set(), schedule = {};
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let supabase = null;
 let currentUser = null, activeScheduleId = null, authMode = 'login';
 let typeFilter = 'all', watchFilter = 'all';
 
@@ -25,6 +25,7 @@ async function json(url, options = {}) {
 }
 
 async function restoreSession() {
+  if (!supabase) return;
   const { data: { session } } = await supabase.auth.getSession();
   currentUser = session?.user || null;
 }
@@ -36,6 +37,7 @@ function updateAuthUI() {
 }
 
 function openAuth(mode = 'login') {
+  if (!supabase) { alert('Authentication is still loading. Please wait a few seconds and try again.'); return; }
   authMode = mode; if (!el.authBackdrop) return;
   el.authEmail.value = ''; el.authPassword.value = ''; el.authMessage.textContent = '';
   const login = mode === 'login';
@@ -183,11 +185,28 @@ function wire() {
   el.scheduleClose?.addEventListener('click', closeSchedule); el.scheduleSave?.addEventListener('click', saveSchedule); (el.scheduleDelete || el.scheduleRemove)?.addEventListener('click', removeSchedule); el.scheduleBackdrop?.addEventListener('click', e => { if (e.target === el.scheduleBackdrop) closeSchedule(); });
 }
 
-supabase.auth.onAuthStateChange((_event, session) => { currentUser = session?.user || null; updateAuthUI(); });
+function setupSupabase() {
+  if (!window.supabase || typeof window.supabase.createClient !== 'function') return false;
+  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabase.auth.onAuthStateChange((_event, session) => { currentUser = session?.user || null; updateAuthUI(); });
+  return true;
+}
 
 async function init() {
-  wire(); tickCountdown(); setInterval(tickCountdown, 1000);
-  try { await restoreSession(); updateAuthUI(); await loadTitles(); populatePhases(); if (currentUser) await loadState(); renderAll(); }
-  catch (e) { console.error(e); if (el.timeline) el.timeline.innerHTML = '<div class="empty-state"><h3>Something went wrong</h3><p>Check the API connection and try again.</p></div>'; }
+  wire();
+  tickCountdown(); setInterval(tickCountdown, 1000);
+  try {
+    setupSupabase();
+    await restoreSession();
+    updateAuthUI();
+    await loadTitles();
+    populatePhases();
+    if (currentUser) await loadState();
+    renderAll();
+  } catch (e) {
+    console.error(e);
+    renderDashboard();
+    if (el.timeline) el.timeline.innerHTML = '<div class="empty-state"><h3>Could not load the Marvel timeline</h3><p>The buttons should still work. Please refresh and try again.</p></div>';
+  }
 }
 document.addEventListener('DOMContentLoaded', init);
