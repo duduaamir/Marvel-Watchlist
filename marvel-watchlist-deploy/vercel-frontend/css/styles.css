@@ -1015,3 +1015,7 @@ a { color: inherit; }
   }
 
 }
+
+
+/* Ensure HTML hidden attribute truly removes modal overlay */
+.modal-backdrop[hidden] { display: none !important; }
